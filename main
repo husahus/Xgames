@@ -1,0 +1,510 @@
+import pygame
+import random
+from os import path
+
+pygame.init()
+
+#Screen dimensions
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 700
+FPS = 60
+#POWERUP_TIME = 5000
+
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("Santa's Sleigh - Christmas Game")
+
+# fonts and score variables
+font = pygame.font.Font(None, 36)
+large_font = pygame.font.Font(None, 72)
+score = 50
+
+#define colors
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+YELLOW = (255, 255, 0)
+PURPLE = (181, 38, 203)
+GREY = (66, 60, 60)
+DARK_BLUE = (34, 34, 156)
+BROWN = (173, 74, 12)
+DARK_GREY = (105, 105, 105)
+
+#game variables
+gravity = 0.5
+jump_strength = -8
+house_speed = 5
+present_speed = 5
+plane_speed_min, plane_speed_max = 4, 8
+bird_speed_min, bird_speed_max = 3, 7
+mob_spawn_cooldown = 1000
+last_mob_spawn = 0
+
+# Sprite groups
+all_sprites = pygame.sprite.Group()
+presents = pygame.sprite.Group()
+houses = pygame.sprite.Group()
+explosions = pygame.sprite.Group()
+mobs = pygame.sprite.Group()
+snowflakes = pygame.sprite.Group()
+
+
+# Load images and sound
+img_dir = path.join(path.dirname(__file__), 'img')
+#sleigh_img = pygame.Surface((50, 30))
+#sleigh_img.fill(RED)
+
+cloud_images = [pygame.image.load(path.join(img_dir, f"cloud{i}.png")).convert_alpha() for i in range(1, 4)]
+mountains_img = pygame.image.load(path.join(img_dir, "pointy_mountains.png")).convert_alpha()
+background_img = pygame.image.load(path.join(img_dir, "Nightsky.jpg")).convert()
+ground_img = pygame.Surface((SCREEN_WIDTH, 200))
+ground_img.fill(GREY)
+sleigh_img = pygame.image.load(path.join(img_dir, "Santasleigh3.png")).convert_alpha()
+
+present_images = []
+#present_list('')
+
+bg_speed_sky = 4
+bg_speed_mountains = 0.5
+bg_x_sky = 1
+bg_x_mountains = 0
+
+clouds = []
+cloud_speed = 2
+
+    # Game sounds
+snd_dir = path.join(path.dirname(__file__), 'snd')
+music_files = [
+    path.join(snd_dir, "background_music4.mp3"),
+    path.join(snd_dir, "background_music3.mp3"),
+    path.join(snd_dir, "background_music2.mp3"),
+    path.join(snd_dir, "background_music1.mp3"),
+]
+pygame.mixer.music.set_volume(0.6)
+
+def play_next_song():
+    if music_files:
+        next_song = random.choice(music_files)
+        pygame.mixer.music.load(next_song)
+        pygame.mixer.music.play()
+
+play_next_song()
+
+
+class Player(pygame.sprite.Sprite):
+    def __init__(self):
+        pygame.sprite.Sprite.__init__(self)
+        #self.image = pygame.transform.scale(player_img, (50, 38))
+        self.original_image = pygame.transform.scale(sleigh_img, (80, 80))
+        self.original_image.set_colorkey(WHITE)
+        self.image = self.original_image
+
+        self.rect = self.image.get_rect()
+        self.rect.centerx = 100   #start x position
+        self.rect.centery = SCREEN_HEIGHT // 2  #start y position
+        self.velocity = 0
+        self.angle = 0
+
+        self.mask = pygame.mask.from_surface(self.image)
+
+    def reset(self):
+        self.rect.centerx = 100
+        self.rect.centery = SCREEN_HEIGHT // 2
+        self.velocity = 0
+        self.angle = 0
+        self.image = self.original_image
+        self.mask = pygame.mask.from_surface(self.image)
+
+
+    def update(self):
+        self.velocity += gravity #apply gravity
+        self.rect.centery += self.velocity #move the sleigh downwards
+
+        # Tilt upwards or downwards based on velocity
+        if self.velocity < -2:
+            self.angle = 10
+        elif self.velocity > 2:
+            self.angle = -10
+        else:
+            self.angle = 0
+
+        self.image = pygame.transform.rotate(self.original_image, self.angle)
+        self.image.set_colorkey(WHITE)
+        self.rect = self.image.get_rect(center=self.rect.center)
+
+        self.mask = pygame.mask.from_surface(self.image)
+
+        #prevent sleigh from going off screen
+        if self.rect.bottom > SCREEN_HEIGHT:
+            self.rect.bottom = SCREEN_HEIGHT
+        if self.rect.top < 0:
+            self.rect.top = 0
+
+    def jump(self):
+        self.velocity = jump_strength #jump upwards
+
+    def drop_present(self):
+        present = Present(self.rect.right, self.rect.centery)
+        all_sprites.add(present)
+        presents.add(present)
+
+class Present(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        pygame.sprite.Sprite.__init__(self)
+        self.image = pygame.Surface((10, 10))
+        #self.image_orig = random.choice(present_images)
+        self.image.fill(BLUE)
+        self.rect = self.image.get_rect()
+        self.rect.centerx = x
+        self.rect.centery = y
+        self.speedy = present_speed
+
+    def update(self):
+        self.rect.y += self.speedy
+        if self.rect.top > SCREEN_HEIGHT:
+            self.kill()
+
+        # Check if present hits the ground
+        if self.rect.top > SCREEN_HEIGHT:
+            explosion = Explosion(self.rect.centerx, SCREEN_HEIGHT)
+            explosions.add(explosion)
+            self.kill()
+
+        # Check if present hits any houses (not just chimneys)
+        for house in houses:
+            if self.rect.colliderect(house.rect):
+                explosion = Explosion(self.rect.centerx, self.rect.centery)
+                explosions.add(explosion)
+                self.kill()
+
+
+class House(pygame.sprite.Sprite):
+    def __init__(self):
+        pygame.sprite.Sprite.__init__(self)
+        self.width = 100
+        self.height = random.randint(150, 300)
+        self.chimney_width = 30
+        self.chimney_height = 40
+
+        #house body
+        self.image = pygame.Surface((self.width, self.height))
+        self.image.fill(RED)
+        self.rect = self.image.get_rect()
+        self.rect.x = SCREEN_WIDTH
+        self.rect.bottom = SCREEN_HEIGHT
+
+
+    def draw_chimney(self):
+        #draw chimn as a black rectangle on top of house
+        chimney_x = self.rect.x + self.width // 2 - self.chimney_width // 2
+        chimney_y = SCREEN_HEIGHT - self.height - self.chimney_height
+        pygame.draw.rect(screen, BROWN, (chimney_x, chimney_y, self.chimney_width, self.chimney_height))
+
+    def update(self):
+        self.rect.x -= house_speed
+        if self.rect.right < 0:
+            self.kill()
+
+class Explosion(pygame.sprite.Sprite):
+    def __init__(self, x, y, color=YELLOW):
+        pygame.sprite.Sprite.__init__(self)
+        self.image = pygame.Surface((40, 40))
+        self.image.fill(color)
+#        self.image.fill(YELLOW)
+        self.rect = self.image.get_rect()
+        self.rect.center = (x, y)
+        self.lifetime = 20
+
+    def update(self):
+        self.lifetime -= 1
+        if self.lifetime <= 0:
+            self.kill()
+
+class Birdexplosion(Explosion):
+    def __init__(self, x, y):
+        super().__init__(x, y, color=DARK_GREY)
+
+class Plane(pygame.sprite.Sprite):
+    def __init__(self):
+        pygame.sprite.Sprite.__init__(self)
+        self.image = pygame.Surface((100, 50))
+        self.image.fill(GREY)
+        self.rect = self.image.get_rect()
+        self.rect.x = SCREEN_WIDTH
+        self.rect.y = random.randint(0, SCREEN_HEIGHT // 2 - 50)
+        self.speed = random.randint(plane_speed_min, plane_speed_max)
+
+    def update(self):
+        self.rect.x -= self.speed
+        if self.rect.right < 0:
+            self.kill()
+
+class Birds(pygame.sprite.Sprite):
+    def __init__(self):
+        pygame.sprite.Sprite.__init__(self)
+        self.image = pygame.Surface((80, 40))
+        self.image.fill(WHITE)
+        self.rect = self.image.get_rect()
+        self.rect.x = SCREEN_WIDTH - 25
+        self.rect.y = random.randint(100, SCREEN_HEIGHT // 2)
+        self.speed = random.randint(bird_speed_min, bird_speed_max)
+
+    def update(self):
+        self.rect.x -= self.speed
+        if self.rect.right < 0:
+            self.kill()
+
+class Snowflake(pygame.sprite.Sprite):
+    def __init__(self):
+        pygame.sprite.Sprite.__init__(self)
+        self.image = pygame.Surface((5, 5))
+        self.image.fill(WHITE)
+        self.rect = self.image.get_rect()
+
+        self.rect.x = random.randint(0, SCREEN_WIDTH)
+        self.rect.y = random.randint(-50, -10)
+        self.speedy = random.uniform(1, 3)
+
+    def update(self):
+        if self.rect.top > SCREEN_HEIGHT:
+            self.kill()
+
+def generate_house():
+    house = House()
+    all_sprites.add(house)
+    houses.add(house)
+#    return house
+
+def generate_cloud():
+    if len(clouds) < 1:
+        cloud_img = random.choice(cloud_images)
+        cloud_x = SCREEN_WIDTH + random.randint(50, 100)
+        cloud_y = random.randint(50, 300)
+        cloud_rect = cloud_img.get_rect(topleft=(cloud_x, cloud_y))
+        clouds.append((cloud_img, cloud_rect))
+
+def update_clouds():
+    for cloud in clouds:
+        cloud_img, cloud_rect = cloud
+        cloud_rect.x -= cloud_speed
+
+    clouds[:] = [(img, rect) for img, rect in clouds if rect.right > 0]
+
+    generate_cloud()
+
+def generate_mob():
+    global last_mob_spawn
+
+    now = pygame.time.get_ticks()
+    if len(mobs) < 3 and now - last_mob_spawn > mob_spawn_cooldown:
+            mob_type = random.choice(["plane", "birds"])
+            if mob_type == "plane":
+                plane = Plane()
+                all_sprites.add(plane)
+                mobs.add(plane)
+            else:
+                birds = Birds()
+                all_sprites.add(birds)
+                mobs.add(birds)
+
+            last_mob_spawn = now
+
+def generate_snowflakes():
+    snowflake = Snowflake()
+    all_sprites.add(snowflake)
+    snowflakes.add(snowflake)
+
+def show_start_screen():
+    screen.fill(WHITE)
+    title_text = large_font.render("Santa's Sleigh Game", True, BLACK)
+    screen.blit(title_text, (SCREEN_WIDTH // 2 - title_text.get_width() // 2, SCREEN_HEIGHT / 2 - 100))
+
+    instructions_text = font.render("Press SPACE to begin", True, BLACK)
+    screen.blit(instructions_text, (SCREEN_WIDTH // 2 - instructions_text.get_width() // 2, SCREEN_HEIGHT // 2 + 50))
+
+    description_text = font.render("Drop presents into chimneys to score points!", True, BLACK)
+    screen.blit(description_text, (SCREEN_WIDTH // 2 - description_text.get_width() // 2, SCREEN_HEIGHT // 2))
+
+    pygame.display.flip()
+
+    #wait for player input
+    waiting = True
+    while waiting:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                quit()
+            if event.type == pygame.KEYDOWN:
+                waiting = False
+
+def show_game_over_screen(final_score):
+    screen.fill(WHITE)
+    game_over_text = large_font.render("Game over", True, BLACK)
+    score_text = font.render(f"Final Score: {final_score}", True, BLACK)
+    restart_text = font.render("Press SPACE to restart", True, BLACK)
+
+    screen.blit(game_over_text, (SCREEN_WIDTH // 2 - game_over_text.get_width() // 2, SCREEN_HEIGHT / 2 - 100))
+    screen.blit(score_text, (SCREEN_WIDTH // 2 - score_text.get_width() // 2, SCREEN_HEIGHT / 2))
+    screen.blit(restart_text, (SCREEN_WIDTH // 2 - restart_text.get_width() // 2, SCREEN_HEIGHT / 2 + 50))
+
+    pygame.display.flip()
+
+    waiting = True
+    while waiting:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                quit()
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                waiting = False
+                restart_game()
+
+def restart_game():
+    global score, last_mob_spawn
+    score = 50
+    last_mob_spawn = 0
+
+    all_sprites.empty()
+    presents.empty()
+    houses.empty()
+    explosions.empty()
+    mobs.empty()
+    clouds.clear()
+
+    main_game()
+
+#Game loop
+def main_game():
+    global score
+    player = Player()
+    all_sprites.add(player)
+    houses.empty()
+#    houses = []
+
+    running = True
+    clock = pygame.time.Clock()
+
+    global bg_x_sky, bg_x_mountains
+    snowflake_timer = pygame.time.get_ticks()
+    snowflake_spawn_delay = 150
+
+    while running:
+        clock.tick(FPS)
+
+        # Event handling
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    player.jump()
+                if event.key == pygame.K_DOWN:
+                    player.drop_present()
+                    global score
+                    score -= 1
+
+        now = pygame.time.get_ticks()
+        if now - snowflake_timer > snowflake_spawn_delay:
+            generate_snowflakes()
+            snowflake_timer = now
+
+
+    # Generate new house at intervals
+        if len(houses) == 0 or houses.sprites()[-1].rect.x < SCREEN_WIDTH - 300:
+            generate_house()
+
+        generate_mob()
+
+    # Update clouds
+        update_clouds()
+
+    # Update all sprites
+        explosions.update()
+        all_sprites.update()
+
+    # Collision detection between presents and houses
+        for present in presents:
+            for house in houses:
+                chimney_x = house.rect.x + house.width // 2 - house.chimney_width // 2
+                chimney_y = SCREEN_HEIGHT - house.height - house.chimney_height
+                if chimney_x <= present.rect.x <= chimney_x + house.chimney_width:
+                    if chimney_y <= present.rect.y <= chimney_y + house.chimney_height:
+                        score += 10
+                        explosion = Explosion(present.rect.centerx, present.rect.centery)
+                        explosions.add(explosion)
+                        present.kill()
+                        break
+
+                    if present.rect.colliderect(house.rect):
+                        explosion = Explosion(present.rect.centerx, present.rect.centery)
+                        explosions.add(explosion)
+                        present.kill()
+
+        # Collision detection between player and houses and chimney
+        for house in houses:
+            chimney_x = house.rect.x + house.width // 2 - house.chimney_width // 2
+            chimney_y = SCREEN_HEIGHT - house.height - house.chimney_height
+            chimney_rect = pygame.Rect(chimney_x, chimney_y, house.chimney_width, house.chimney_height)
+
+            if pygame.sprite.collide_mask(player, house):
+                running = False
+            if player.rect.colliderect(chimney_rect):
+                running = False
+
+        # Collision detection for player with mobs (planes and birds)
+        for mob in mobs:
+            if isinstance(mob, Plane) and player.rect.colliderect(mob.rect):
+                running = False  # Game over if player hits a plane
+            elif isinstance(mob, Birds) and player.rect.colliderect(mob.rect):
+                score -= 10  # Subtract 10 points if player hits birds
+                mob.kill()
+
+        if pygame.sprite.spritecollide(player, houses, False):
+            running = False
+
+        #Check if player hit ground
+        if player.rect.bottom >= SCREEN_HEIGHT - 50:
+            running = False #gameover if player hits ground
+
+        # Bakground scrolling
+        bg_x_sky -= bg_speed_sky
+        bg_x_mountains -= bg_speed_mountains
+
+        if bg_x_sky <= -SCREEN_WIDTH:
+            bg_x_sky = 0
+
+        if bg_speed_mountains <= -SCREEN_WIDTH - 200:
+            bg_x_mountains = 0
+
+        #  Drawing
+        screen.fill(WHITE)
+        screen.blit(background_img, (0, - 150))
+        screen.blit(mountains_img, (bg_x_mountains, SCREEN_HEIGHT - 300))
+        screen.blit(mountains_img, (bg_x_mountains + SCREEN_WIDTH + 200, SCREEN_HEIGHT - 300))
+        screen.blit(ground_img, (0, 550))
+
+        for cloud_img, cloud_rect in clouds:
+            screen.blit(cloud_img, cloud_rect)
+
+        all_sprites.draw(screen)
+
+        # Draw chimneys
+        for house in houses:
+            house.draw_chimney()
+
+        # Draw explosions
+        explosions.draw(screen)
+
+        # Draw score
+        score_text = font.render(f"Score: {score}", True, WHITE)
+        screen.blit(score_text, (10, 10))
+
+        #update the screen
+        pygame.display.flip()
+
+    show_game_over_screen(score)
+
+# start screen before game begins
+show_start_screen()
+main_game()
